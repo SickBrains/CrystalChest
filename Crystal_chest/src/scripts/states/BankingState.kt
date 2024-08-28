@@ -33,36 +33,41 @@ class BankingState : ScriptState {
 
         if (!bank.contains(MyPlayer.getTile())) {
             GlobalWalking.walkTo(bank.randomTile)
+            return
         }
 
-        if (bank.contains(MyPlayer.getTile())) {
+        if (!Bank.isOpen()) {
             withABC2Delay { Bank.ensureOpen() }
             Waiting.wait(1000)
-
-            if (hasKeyParts()) {
-                val itemCount = Bank.getCount(ItemIds.CRYSTAL_KEY)
-                val chance = calculateChance(itemCount)
-                val randomNumber = random.nextInt(100)
-
-                info("Item count: $itemCount, Chance: $chance, Random Number: $randomNumber")
-
-                if (randomNumber < chance) {
-                    script.changeState(KeysState())
-                    script.isCombiningKeys = true
-                    return
-                }
-            }
-
-            // Deposit inventory and ensure equipment
-            depositInventoryWithDelay()
-            ensureRingEquipped()
-
-            // Withdraw items in randomized order
-            randomizedItemWithdrawals(random)
-
-            withABC2Delay { Bank.close() }
+            return
         }
+
+        if (hasKeyParts()) {
+            val itemCount = Bank.getCount(ItemIds.CRYSTAL_KEY)
+            val chance = calculateChance(itemCount)
+            val randomNumber = random.nextInt(100)
+
+            info("Item count: $itemCount, Chance: $chance, Random Number: $randomNumber")
+
+            if (randomNumber < chance) {
+                script.changeState(KeysState())
+                script.isCombiningKeys = true
+                return
+            }
+        }
+
+        // Deposit inventory and ensure equipment
+        if (!depositInventoryWithDelay()) {
+            return
+        }
+        ensureRingEquipped()
+
+        // Withdraw items in randomized order
+        randomizedItemWithdrawals(random)
+
+        withABC2Delay { Bank.close() }
     }
+
 
     // Withdraw items in random order
     private fun randomizedItemWithdrawals(random: Random) {
@@ -100,12 +105,12 @@ class BankingState : ScriptState {
         return toothHalfCount > 10 && loopHalfCount > 10
     }
 
-    private fun depositInventoryWithDelay() {
-        withABC2Delay {
-            info("Depositing inventory...")
-            Bank.depositInventory()
-        }
+    private fun depositInventoryWithDelay(): Boolean {
+        info("Depositing inventory...")
+        withABC2Delay { Bank.depositInventory() }
+        return Inventory.isEmpty()
     }
+
 
     private fun ensureRingEquipped() {
         val isRingEquipped = Equipment.getAll().any { it.id in ringIds }
