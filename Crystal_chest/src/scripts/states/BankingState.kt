@@ -6,24 +6,17 @@ import org.tribot.script.sdk.types.Area
 import org.tribot.script.sdk.types.WorldTile
 import org.tribot.script.sdk.walking.GlobalWalking
 import scripts.ABC2Settings.withABC2Delay
+import scripts.Constants.CRYSTAL_KEY
+import scripts.Constants.LOOP_HALF
+import scripts.Constants.TELEPORT_TO_HOUSE
+import scripts.Constants.TOOTH_HALF
+import scripts.Constants.ringIds
 import scripts.Crystal_Chest
 import scripts.ScriptState
-
 import java.util.Random
 
-// Constants for item IDs
-object ItemIds {
-    const val CRYSTAL_KEY = 989
-    const val TOOTH_HALF = 987
-    const val LOOP_HALF = 985
-    const val TELEPORT_TO_HOUSE = "Teleport to house"
-}
 
-// Ring of Dueling IDs
-val ringIds = setOf(2552, 2554, 2556, 2558, 2560, 2562, 2564, 2566)
 
-// Bank area
-val bank = Area.fromRectangle(WorldTile(2440, 3087, 0), WorldTile(2443, 3083, 0))
 
 class BankingState : ScriptState {
 
@@ -31,75 +24,92 @@ class BankingState : ScriptState {
         val random = Random()
         info("Banking...")
 
-        if (!bank.contains(MyPlayer.getTile())) {
-            GlobalWalking.walkTo(bank.randomTile)
+        if (!Bank.isNearby()) {
+            GlobalWalking.walkToBank()
             return
         }
 
         if (!Bank.isOpen()) {
-            withABC2Delay { Bank.ensureOpen() }
-            Waiting.wait(1000)
+            openBankWithDelay()
             return
         }
 
-        if (hasKeyParts()) {
-            val itemCount = Bank.getCount(ItemIds.CRYSTAL_KEY)
-            val chance = calculateChance(itemCount)
-            val randomNumber = random.nextInt(100)
-
-            info("Item count: $itemCount, Chance: $chance, Random Number: $randomNumber")
-
-            if (randomNumber < chance) {
-                script.changeState(KeysState())
+        // Check if we should combine keys
+        if (!script.isCombiningKeys && hasKeyParts()) {
+            if (shouldCombineKeys(Bank.getCount(CRYSTAL_KEY), random)) {
                 script.isCombiningKeys = true
-                return
+                return  // Stop further actions until keys are combined
             }
         }
-
-        // Deposit inventory and ensure equipment
-        if (!depositInventoryWithDelay()) {
-            return
-        }
+        if (!depositInventoryWithDelay()) return
         ensureRingEquipped()
 
-        // Withdraw items in randomized order
-        randomizedItemWithdrawals(random)
+        withdrawRetry(TELEPORT_TO_HOUSE, "Teleport to house", random, maxRetries = 3)
+        withdrawRetry(CRYSTAL_KEY, "Crystal key", random, maxRetries = 3)
 
+        closeBankWithDelay()
+    }
+    
+    private fun openBankWithDelay() {
+        withABC2Delay { Bank.ensureOpen() }
+        Waiting.waitUntil(10000, 1000) { Bank.isOpen() }
+    }
+    
+    private fun closeBankWithDelay() {
         withABC2Delay { Bank.close() }
     }
 
-
-    // Withdraw items in random order
-    private fun randomizedItemWithdrawals(random: Random) {
-        if (random.nextBoolean()) {
-            info("Withdrawing 'Teleport to house' first.")
-            withdrawTeleportToHouse(random)
-            withdrawCrystalKeys(random)
+    private fun withdrawRetry(itemId: Int, itemName: String, random: Random, maxRetries: Int) {
+        val withdrawAmount = if (itemName == "Teleport to house") {
+            weightedRandomChoice(listOf(80 to 6, 5 to 5, 15 to 2))
         } else {
-            info("Withdrawing 'Crystal key' first.")
-            withdrawCrystalKeys(random)
-            withdrawTeleportToHouse(random)
+            weightedRandomChoice(listOf(80 to 6, 15 to 5, 5 to 4))
+        }
+
+        var success = false
+        var attempts = 0
+
+        while (attempts < maxRetries && !success) {
+            info("Attempting to withdraw $withdrawAmount of $itemName (attempt ${attempts + 1}/$maxRetries).")
+            success = withdrawCheck(itemId, withdrawAmount, itemName)
+            if (!success) {
+                info("Failed to withdraw $itemName. Retrying...")
+                attempts++
+            }
+        }
+
+        if (!success) {
+            error("Failed to withdraw $itemName after $maxRetries attempts. Skipping this item.")
+        } else {
+            info("Successfully withdrew $withdrawAmount of $itemName after $attempts attempt(s).")
         }
     }
 
-    // Will add player preferences for the weights later
-    private fun withdrawTeleportToHouse(random: Random) {
-        val withdrawAmount = weightedRandomChoice(listOf(80 to 6, 5 to 5, 15 to 2))
-        if (!withdrawItemWithDelay(ItemIds.TELEPORT_TO_HOUSE, withdrawAmount)) {
-            error("Failed to withdraw 'Teleport to house'.")
+    private fun withdrawCheck(itemId: Int, amount: Int, itemName: String): Boolean {
+        val initialCount = Inventory.getCount(itemId)
+        if (Bank.withdraw(itemId, amount)) {
+            // Wait a bit for the withdrawal to reflect in the inventory
+            Waiting.waitUntil(2000) { Inventory.getCount(itemId) > initialCount }
+
+            // Verify that the item count in inventory increased
+            val newCount = Inventory.getCount(itemId)
+            return newCount > initialCount
+        } else {
+            info("Withdrawal attempt for $itemName failed.")
+            return false
         }
     }
 
-    private fun withdrawCrystalKeys(random: Random) {
-        val withdrawAmount = weightedRandomChoice(listOf(80 to 6, 15 to 5, 5 to 4))
-        if (!withdrawItemWithDelay("Crystal key", withdrawAmount)) {
-            error("Failed to withdraw 'Crystal key'.")
-        }
+    private fun shouldCombineKeys(itemCount: Int, random: Random): Boolean {
+        val chance = calculateChance(itemCount)
+        val randomNumber = random.nextInt(100)
+        info("Item count: $itemCount, Chance: $chance, Random Number: $randomNumber")
+        return randomNumber < chance
     }
 
     private fun hasKeyParts(): Boolean {
-        val toothHalfCount = Bank.getCount(ItemIds.TOOTH_HALF)
-        val loopHalfCount = Bank.getCount(ItemIds.LOOP_HALF)
+        val toothHalfCount = Bank.getCount(TOOTH_HALF)
+        val loopHalfCount = Bank.getCount(LOOP_HALF)
 
         info("Tooth half count: $toothHalfCount, Loop half count: $loopHalfCount")
         return toothHalfCount > 10 && loopHalfCount > 10
@@ -111,7 +121,6 @@ class BankingState : ScriptState {
         return Inventory.isEmpty()
     }
 
-
     private fun ensureRingEquipped() {
         val isRingEquipped = Equipment.getAll().any { it.id in ringIds }
 
@@ -120,17 +129,21 @@ class BankingState : ScriptState {
 
             ringIdToWithdraw?.let {
                 info("Withdrawing Ring of Dueling with ID: $it")
-                withABC2Delay { Bank.withdraw(it, 1) }
-                withABC2Delay {
-                    val ring = Inventory.getAll().firstOrNull { it.id in ringIds }
-                    ring?.let {
-                        info("Equipping Ring of Dueling with ID: ${ring.id}")
-                        Equipment.equip(ring.id)
-                    }
-                }
+                withdrawAndEquipRing(it)
             } ?: error("No Ring of Dueling found in the bank.")
         } else {
             info("Ring of Dueling is already equipped.")
+        }
+    }
+
+    private fun withdrawAndEquipRing(ringId: Int) {
+        withABC2Delay { Bank.withdraw(ringId, 1) }
+        withABC2Delay {
+            val ring = Inventory.getAll().firstOrNull { it.id in ringIds }
+            ring?.let {
+                info("Equipping Ring of Dueling with ID: ${ring.id}")
+                Equipment.equip(ring.id)
+            }
         }
     }
 
@@ -151,8 +164,6 @@ class BankingState : ScriptState {
     }
 }
 
-
-// function for weighted random choice
 private fun <T> weightedRandomChoice(choices: List<Pair<Int, T>>): T {
     val totalWeight = choices.sumOf { it.first }
     val randomNumber = Random().nextInt(totalWeight)
@@ -163,14 +174,3 @@ private fun <T> weightedRandomChoice(choices: List<Pair<Int, T>>): T {
     }
     throw IllegalStateException("Big bad this should never happen :(")
 }
-
-private fun withdrawItemWithDelay(itemName: String, amount: Int): Boolean {
-    return if (Bank.contains(itemName)) {
-        withABC2Delay { Bank.withdraw(itemName, amount) }
-        true
-    } else {
-        error("$itemName not found in the bank.")
-        false
-    }
-}
-

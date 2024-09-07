@@ -5,17 +5,17 @@ import org.tribot.script.sdk.Inventory
 import org.tribot.script.sdk.Inventory.getEmptySlots
 import org.tribot.script.sdk.MyPlayer
 import org.tribot.script.sdk.Waiting
-import org.tribot.script.sdk.Waiting.waitUniform
 import org.tribot.script.sdk.pricing.Pricing.lookupPrice
 import org.tribot.script.sdk.query.Query
 import org.tribot.script.sdk.types.GroundItem
 import org.tribot.script.sdk.types.InventoryItem
 import scripts.*
 import scripts.ABC2Settings.withABC2Delay
+import scripts.Constants.CHEST
+import scripts.Constants.itemIDsToPickup
 
-
-// This isnt refined, was my first time working with tribot sdk
 class ProcessState : ScriptState {
+
     override fun performAction(script: Crystal_Chest) {
         println("Process state...")
         if (Inventory.contains("Crystal key") && getEmptySlots() > 2) {
@@ -25,10 +25,8 @@ class ProcessState : ScriptState {
     }
 
     private fun attemptItemPickup() {
-        // Will only pick up items with these IDs (that have value)
-        val itemIDsToPickup = listOf(1631, 995, 1603, 1601, 2363, 985, 987, 454, 441, 1079, 1093)
 
-        // Check if there is at least one empty inventory slot
+        // Ensure there's at least one empty slot
         if (getEmptySlots() > 0) {
             val nearbyItems = Query.groundItems()
                 .idEquals(*itemIDsToPickup.toIntArray())
@@ -36,34 +34,44 @@ class ProcessState : ScriptState {
                 .toList()
 
             nearbyItems.forEach { item ->
-                // Try to pick up each item with proper visibility and interaction checks
-                if (pickupItem(item)) {
-                    println("Successfully picked up item with ID ${item.id}.")
-                } else {
-                    println("Failed to pick up item with ID ${item.id}. Retrying...")
-                    if (adjustCameraAndRetry(item)) {
-                        println("Picked up item after camera adjustment, ID: ${item.id}.")
-                    } else {
-                        println("Failed to pick up item with ID ${item.id} after retry.")
-                    }
+                // Try to pick up each item and retry if needed
+                if (!pickupItemWithRetry(item, maxRetries = 3)) {
+                    println("Failed to pick up item with ID ${item.id} after retries.")
                 }
             }
         } else {
             println("No empty space in inventory for item pickup.")
         }
     }
+
+    private fun pickupItemWithRetry(item: GroundItem, maxRetries: Int): Boolean {
+        var attempts = 0
+        while (attempts < maxRetries) {
+            if (pickupItem(item)) {
+                println("Successfully picked up item with ID ${item.id}.")
+                return true
+            } else {
+                println("Failed to pick up item with ID ${item.id}. Retrying...")
+                if (adjustCameraAndRetry(item)) {
+                    println("Picked up item after camera adjustment, ID: ${item.id}.")
+                    return true
+                }
+            }
+            attempts++
+        }
+        return false
+    }
+
     private fun pickupItem(item: GroundItem): Boolean {
-        // First attempt to pick up the item if it's visible
         if (item.isVisible) {
             if (item.click("Take")) {
-                // Small wait to ensure the item is picked up and removed from the ground
                 return waitUntilItemDisappears(item)
             }
         }
         return false
     }
+
     private fun adjustCameraAndRetry(item: GroundItem): Boolean {
-        // Attempt to adjust the camera to make the item visible and retry pickup
         if (item.adjustCameraTo()) {
             if (item.click("Take")) {
                 return waitUntilItemDisappears(item)
@@ -71,8 +79,8 @@ class ProcessState : ScriptState {
         }
         return false
     }
+
     private fun waitUntilItemDisappears(item: GroundItem): Boolean {
-        // Wait until the item is no longer present in the game world
         return Waiting.waitUntil(3000) {
             !Query.groundItems()
                 .idEquals(item.id)
@@ -80,7 +88,8 @@ class ProcessState : ScriptState {
                 .isAny
         }
     }
-    fun unlockChest(script: Crystal_Chest) {
+
+    private fun unlockChest(script: Crystal_Chest) {
         val inventoryBefore = getCurrentInventory()
 
         if (Inventory.contains("Crystal key")) {
@@ -88,11 +97,10 @@ class ProcessState : ScriptState {
                 if (getSelectedItemName() != "Crystal key") {
                     useItem("Crystal key")
                 }
-                val success = interactWithGameObjectById(172, "Use")
+                val success = interactWithGameObjectById(CHEST, "Use")
 
                 if (success) {
                     script.incrementSuccessfulUnlocks()
-                    waitUniform(250, 500)
                     val inventoryAfter = getCurrentInventory()
                     val gainedItems = compareInventoryStates(inventoryBefore, inventoryAfter)
                     val profit = calculateProfit(gainedItems)
@@ -104,23 +112,24 @@ class ProcessState : ScriptState {
         }
     }
 
-    fun addProfit(amount: Int) {
+    private fun addProfit(amount: Int) {
         Crystal_Chest.totalProfit += amount
     }
+
     private fun calculateProfit(gainedItems: List<InventoryItemInfo>): Int {
         var profit = 0
         gainedItems.forEach { item ->
             if (item.id == 995) {
-                profit += item.quantity
+                profit += item.quantity  // 995 is coins
             } else {
                 val price = lookupPrice(item.id).orElse(0)
-                val itemValue = price * item.quantity
-                profit += itemValue
-                println("Gained item: ID=${item.id}, Quantity=${item.quantity}, Value=$itemValue")
+                profit += price * item.quantity
+                println("Gained item: ID=${item.id}, Quantity=${item.quantity}, Value=${price * item.quantity}")
             }
         }
         return profit
     }
+
     private fun compareInventoryStates(
         before: List<InventoryItemInfo>,
         after: List<InventoryItemInfo>
@@ -140,79 +149,62 @@ class ProcessState : ScriptState {
     data class InventoryItemInfo(val id: Int, val quantity: Int)
 
     private fun getCurrentInventory(): List<InventoryItemInfo> {
-        val inventoryItems = Inventory.getAll()
-        val itemCounts = inventoryItems.groupBy { it.id }.mapValues { entry ->
-            Inventory.getCount(entry.key)
+        // Get all unique item IDs in the inventory
+        val uniqueItemIds = Inventory.getAll().map { it.id }.distinct()
+
+        // For each unique item ID, get the total count of that item in the inventory
+        return uniqueItemIds.map { id ->
+            InventoryItemInfo(id, Inventory.getCount(id))
         }
-        return itemCounts.map { (id, count) -> InventoryItemInfo(id, count) }
     }
 
-    fun useItem(itemName: String?): Boolean {
+    private fun useItem(itemName: String?): Boolean {
         return Query.inventory()
-            .nameStartsWith(itemName)
+            .nameEquals(itemName)
             .findClosestToMouse()
             .map(InventoryItem::ensureSelected)
             .orElse(false)
     }
 
-    fun interactWithGameObjectById(objectId: Int, interaction: String, justInteract: Boolean = false): Boolean {
-
-        val success = Query.gameObjects()
+    private fun interactWithGameObjectById(objectId: Int, interaction: String): Boolean {
+        val gameObject = Query.gameObjects()
             .idEquals(objectId)
             .findClosestByPathDistance()
-            .map { gameObject ->
-                println("Game object with ID $objectId found, attempting to interact.")
-                gameObject.interact(interaction)
-            }
-            .orElse(false)
 
-        if (success) {
-            return handleInteractionSuccess(objectId, justInteract)
-        } else {
-            println("Failed to initiate interaction with object ID $objectId.")
-        }
-
-        return false
+        return gameObject.map { obj ->
+            println("Found game object with ID $objectId, interacting...")
+            obj.interact(interaction)
+            handleInteractionCompletion(objectId)
+        }.orElse(false)
     }
 
-    fun handleInteractionSuccess(objectId: Int, justInteract: Boolean): Boolean {
-        println("Successfully initiated interaction with object ID $objectId.")
-        if (justInteract) return true
-
-        Waiting.wait(50)
-
-        val playerStartedMoving = Waiting.waitUntil(1000) { MyPlayer.isMoving() }
-        if (playerStartedMoving) {
-            println("Player is moving towards the object.")
+    private fun handleInteractionCompletion(objectId: Int): Boolean {
+        // Wait for player to start moving
+        if (Waiting.waitUntil(1000) { MyPlayer.isMoving() }) {
+            println("Player started moving towards object ID $objectId.")
+            // Wait for the player to stop and check for animation completion
             if (waitForPlayerToStop()) {
                 return checkForInteractionCompletion(objectId)
             }
         } else {
-            println("Player did not start moving; assuming immediate interaction was successful.")
+            println("Player didn't move; assuming immediate interaction with object ID $objectId.")
             return true
         }
-
         return false
     }
 
-    fun waitForPlayerToStop(): Boolean {
-        return Waiting.waitUntil { !MyPlayer.isMoving() }.also {
-            if (!it) println("Player is still moving after waiting for 50 milliseconds.")
-        }
+    private fun waitForPlayerToStop(): Boolean {
+        return Waiting.waitUntil { !MyPlayer.isMoving() }
     }
-    fun checkForInteractionCompletion(objectId: Int): Boolean {
-        val animationStarted = Waiting.waitUntil(1000) { MyPlayer.getAnimation() != -1 }
-        if (animationStarted) {
-            return Waiting.waitUntil { MyPlayer.getAnimation() == -1 }.also {
-                if (it) {
-                    println("Interaction with object ID $objectId completed successfully.")
-                } else {
-                    println("Failed to confirm interaction completion within the expected timeframe.")
-                }
+
+    private fun checkForInteractionCompletion(objectId: Int): Boolean {
+        return if (Waiting.waitUntil(1000) { MyPlayer.getAnimation() != -1 }) {
+            Waiting.waitUntil { MyPlayer.getAnimation() == -1 }.also {
+                if (it) println("Interaction with object ID $objectId completed.")
             }
         } else {
             println("No animation detected; assuming interaction was successful.")
-            return true
+            true
         }
     }
 }

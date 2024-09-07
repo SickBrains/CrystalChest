@@ -16,9 +16,12 @@ import org.tribot.script.sdk.script.TribotScriptManifest
 import org.tribot.script.sdk.walking.GlobalWalking
 import org.tribot.script.sdk.walking.adapter.DaxWalkerAdapter
 import scripts.states.BankingState
+import scripts.states.KeysState
 import scripts.states.ProcessState
 import scripts.states.WalkingState
 import java.awt.Graphics
+import java.security.PrivateKey
+import java.security.PublicKey
 import javax.swing.*
 
 val chestLocation = listOf(
@@ -33,7 +36,7 @@ val chestLocation = listOf(
     description = "Opens Crystal Chests in Taverley, you will have to buy the keys and dueling rings yourself."
 )
 class Crystal_Chest : TribotScript {
-    private val engine = DaxWalkerAdapter(PUBLIC_KEY, SECRET_KEY)
+    private val engine = DaxWalkerAdapter(PublicKey, PrivateKey)
 
     private var currentState: ScriptState = BankingState()
     private var successfulUnlocks = 0
@@ -103,10 +106,15 @@ class Crystal_Chest : TribotScript {
 
     private fun updateState() {
         when {
+            shouldCombineKeys() -> changeState(KeysState())  // Added check for combining keys
             shouldProcess() -> changeState(ProcessState())
             shouldBank() -> changeState(BankingState())
             shouldWalk() -> changeState(WalkingState())
         }
+    }
+
+    private fun shouldCombineKeys(): Boolean {
+        return isCombiningKeys
     }
 
     private fun shouldProcess(): Boolean {

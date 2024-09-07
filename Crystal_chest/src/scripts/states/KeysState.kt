@@ -3,85 +3,84 @@ package scripts.states
 import org.tribot.script.sdk.*
 import org.tribot.script.sdk.query.Query
 import scripts.ABC2Settings.withABC2Delay
+import scripts.Constants
 import scripts.Crystal_Chest
 import scripts.ScriptState
-
-
 import java.util.*
 
 class KeysState : ScriptState {
+
     override fun performAction(script: Crystal_Chest) {
         println("Combining keys...")
-        val random = Random()
-        combineKeys(random)
         script.isCombiningKeys = false
+
+        combineKeys(Random())
     }
 
     private fun combineKeys(random: Random) {
-        withABC2Delay { Bank.ensureOpen() }
-
         withABC2Delay {
+            Bank.ensureOpen()
             println("Depositing inventory...")
             Bank.depositInventory()
+            Waiting.waitUntil { Inventory.isEmpty() }
+            withdrawKeyParts(random)
         }
+    }
 
-        Waiting.wait(1000)
-
+    private fun withdrawKeyParts(random: Random) {
         val keyAmount = random.nextInt(8) + 7
 
+        // Withdraw Tooth half of a key
         withABC2Delay {
             if (Bank.withdraw(985, keyAmount)) {
                 println("Withdrew $keyAmount 'Tooth half of a key'.")
             } else {
-                println("Failed to withdraw $keyAmount 'Tooth half of a key'. Please check bank contents.")
-
+                println("Failed to withdraw 'Tooth half of a key'.")
             }
         }
-
-        Waiting.wait(1000)
-
+        // Wait for tooth halves to be in inventory
+        Waiting.waitUntil { Inventory.getCount(985) >= keyAmount }
+        // Withdraw Loop half of a key
         withABC2Delay {
             if (Bank.withdraw(987, keyAmount)) {
                 println("Withdrew $keyAmount 'Loop half of a key'.")
             } else {
-                println("Failed to withdraw $keyAmount 'Loop half of a key'. Please check bank contents.")
-
+                println("Failed to withdraw 'Loop half of a key'.")
             }
         }
-        Waiting.wait(1000)
+        // Wait for loop halves to be in inventory
+        Waiting.waitUntil { Inventory.getCount(987) >= keyAmount }
+        // Close the bank and proceed to combine keys
         Bank.close()
-        useKeys()
+        combineKeyParts()
     }
 
-    private fun useKeys() {
-        var toothHalfCount = Inventory.getCount(985)
-        var loopHalfCount = Inventory.getCount(987)
+    private fun combineKeyParts() {
+        val toothHalfCount = Inventory.getCount(Constants.TOOTH_HALF)
+        val loopHalfCount = Inventory.getCount(Constants.LOOP_HALF)
 
-        while (toothHalfCount > 0 && loopHalfCount > 0) {
-            withABC2Delay {
-                if (useItem(985, 987)) {
-                    println("Combined 'Tooth half of a key' and 'Loop half of a key'.")
-                    toothHalfCount--
-                    loopHalfCount--
-                } else {
-                    println("Failed to combine 'Tooth half of a key' and 'Loop half of a key'. Breaking out of the loop.")
+        if (toothHalfCount > 0 && loopHalfCount > 0) {
+            combineSingleKeyPair(toothHalfCount, loopHalfCount)
+        } else {
+            println("Not enough key parts to combine.")
+        }
+    }
+
+    private fun combineSingleKeyPair(toothHalfCount: Int, loopHalfCount: Int) {
+        val toothHalf = Query.inventory().idEquals(985).findClosestToMouse()
+        val loopHalf = Query.inventory().idEquals(987).findRandom()
+
+        toothHalf.ifPresent { item1 ->
+            loopHalf.ifPresent { item2 ->
+                withABC2Delay {
+                    if (item1.useOn(item2)) {
+                        println("Combined 'Tooth half of a key' and 'Loop half of a key'.")
+                        combineKeyParts()
+                    } else {
+                        println("Failed to combine keys.")
+                    }
                 }
             }
         }
-
-        if (toothHalfCount == 0 || loopHalfCount == 0) {
-            println("Not enough key parts to combine anymore.")
-        }
-    }
-
-    fun useItem(itemId1: Int, itemId2: Int): Boolean {
-        val item1 = Query.inventory().idEquals(itemId1).findClosestToMouse()
-        val item2 = Query.inventory().idEquals(itemId2).findRandom()
-
-        return item1.map { i1 ->
-            item2.map { i2 ->
-                i1.useOn(i2)
-            }.orElse(false)
-        }.orElse(false)
     }
 }
